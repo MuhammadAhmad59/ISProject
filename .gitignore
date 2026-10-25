@@ -1,0 +1,17 @@
+# secrets and runtime data - NEVER commit the key
+tg_data/
+demo_data/
+demo_folder/
+key.bin
+*.log
+*.anchor
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
