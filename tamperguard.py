@@ -501,8 +501,11 @@ def main(argv=None):
     elif a.cmd == "show-log":
         key = load_key(a.data)
         for e in SecureLog(a.data, key).entries()[-a.n:]:
+            path = str(e.get("path", ""))
+            if len(path) > 45:                      # keep each line short enough for narrow consoles
+                path = "..." + path[-42:]
             print("%s  #%s  %-8s %-18s %s" % (e.get("ts", ""), e.get("idx", "?"),
-                                              e.get("severity", ""), e.get("event", ""), e.get("path", "")))
+                                              e.get("severity", ""), e.get("event", ""), path))
     return 0
 
 
