@@ -1,0 +1,177 @@
+{
+  "summary": {
+    "attack_scenarios": 15,
+    "detected": 15,
+    "detection_rate_pct": 100.0,
+    "false_positives_on_clean_run": 0,
+    "all_as_expected": true
+  },
+  "scenarios": [
+    {
+      "id": "S01",
+      "category": "Baseline behaviour",
+      "scenario": "No changes (false-positive check)",
+      "outcome": "NO FALSE ALARM",
+      "as_expected": true,
+      "observed": "no alerts"
+    },
+    {
+      "id": "S02",
+      "category": "Attack on files",
+      "scenario": "File content modified",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['MODIFIED']"
+    },
+    {
+      "id": "S03",
+      "category": "Attack on files",
+      "scenario": "Stealthy 1-bit change with forged size & timestamp",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "single-bit flip, size+mtime forged -> ['MODIFIED']"
+    },
+    {
+      "id": "S04",
+      "category": "Attack on files",
+      "scenario": "File deleted",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['DELETED']"
+    },
+    {
+      "id": "S05",
+      "category": "Attack on files",
+      "scenario": "Malicious file planted (web shell)",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['NEW_FILE']"
+    },
+    {
+      "id": "S06",
+      "category": "Attack on files",
+      "scenario": "File renamed to hide it",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['RENAMED']"
+    },
+    {
+      "id": "S07",
+      "category": "Attack on files",
+      "scenario": "Permissions changed (file made read-only)",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['PERMISSION_CHANGED']"
+    },
+    {
+      "id": "S08",
+      "category": "Attack on files",
+      "scenario": "Ransomware-style mass encryption",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['DELETED', 'MASS_CHANGE', 'NEW_FILE']"
+    },
+    {
+      "id": "S09",
+      "category": "Attack on evidence",
+      "scenario": "Log entry edited",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "entry 1: invalid MAC (entry was edited or forged)"
+    },
+    {
+      "id": "S10",
+      "category": "Attack on evidence",
+      "scenario": "Log entry deleted from the middle",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "entry 1: index mismatch (entry deleted/re-ordered?); entry 1: broken hash chain (previous entry changed or removed)"
+    },
+    {
+      "id": "S11",
+      "category": "Attack on evidence",
+      "scenario": "Newest log entries truncated",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "anchor says 4 entries but log has 2 (log truncated or entries added/removed)"
+    },
+    {
+      "id": "S12",
+      "category": "Attack on evidence",
+      "scenario": "Whole log file deleted",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "anchor says 2 entries but log has 0 (log truncated or entries added/removed)"
+    },
+    {
+      "id": "S13",
+      "category": "Attack on evidence",
+      "scenario": "Log rewritten with re-computed plain-hash chain (no key)",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "entry 0: invalid MAC (entry was edited or forged); entry 1: invalid MAC (entry was edited or forged)"
+    },
+    {
+      "id": "S14",
+      "category": "Attack on evidence",
+      "scenario": "Baseline hash edited to hide a changed file",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['BASELINE_TAMPERED']"
+    },
+    {
+      "id": "S15",
+      "category": "Attack on evidence",
+      "scenario": "Baseline file deleted",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "['BASELINE_TAMPERED']"
+    },
+    {
+      "id": "S16",
+      "category": "Attack on evidence",
+      "scenario": "Anchor file forged to hide truncation",
+      "outcome": "DETECTED",
+      "as_expected": true,
+      "observed": "anchor file: invalid MAC (anchor forged)"
+    },
+    {
+      "id": "L01",
+      "category": "Known limitation",
+      "scenario": "Attacker steals the secret key and re-signs everything",
+      "outcome": "NOT DETECTED",
+      "as_expected": true,
+      "observed": "attacker with key re-signed baseline -> no alerts (UNDETECTED)"
+    },
+    {
+      "id": "L02",
+      "category": "Known limitation",
+      "scenario": "Rollback: attacker restores older valid log + anchor",
+      "outcome": "NOT DETECTED",
+      "as_expected": true,
+      "observed": "rollback to older valid copy -> no alerts (UNDETECTED)"
+    }
+  ],
+  "performance": {
+    "init_1000_files_100KB_s": 5.764,
+    "check_1000_files_100KB_s": 0.916,
+    "data_scanned_MB": 97.7,
+    "throughput_MB_per_s": 106.6,
+    "hash_100MB_file_s": 0.272,
+    "log_append_500_entries_s": 5.937,
+    "log_verify_500_entries_s": 0.0312,
+    "log_verify_ok": true
+  },
+  "latency": {
+    "poll_interval_s": 0.5,
+    "latencies_s": [
+      0.212,
+      0.602,
+      0.602,
+      0.601,
+      0.595
+    ],
+    "mean_latency_s": 0.522,
+    "max_latency_s": 0.602
+  }
+}
