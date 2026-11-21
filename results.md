@@ -16,5 +16,8 @@
 | S14 | Attack on evidence | Baseline hash edited to hide a changed file | DETECTED |
 | S15 | Attack on evidence | Baseline file deleted | DETECTED |
 | S16 | Attack on evidence | Anchor file forged to hide truncation | DETECTED |
+| S17 | Attack on files | Ransomware below mass-change threshold (5 files, entropy check) | DETECTED |
+| S18 | False-positive control | Normal text edits to 6 documents | NO FALSE ALARM |
+| S19 | False-positive control | Already-compressed archive legitimately replaced | NO FALSE ALARM |
 | L01 | Known limitation | Attacker steals the secret key and re-signs everything | NOT DETECTED |
 | L02 | Known limitation | Rollback: attacker restores older valid log + anchor | NOT DETECTED |

@@ -15,7 +15,7 @@ to an audit log that **cannot be silently edited** (HMAC hash chain + signed anc
 | File | Purpose |
 |---|---|
 | `tamperguard.py` | the tool (CLI + library) |
-| `attack_simulation.py` | 18 attack scenarios, performance and latency tests |
+| `attack_simulation.py` | 21 test scenarios (attacks, false-positive controls, known limitations), performance and latency tests |
 | `demo.py` | step-by-step demo for the in-class evaluation |
 | `results.json`, `results.md` | output of the last evaluation run |
 
@@ -73,8 +73,24 @@ python attack_simulation.py    # runs all attack scenarios + benchmarks
 | RENAMED | MEDIUM | same content under a new name |
 | PERMISSION_CHANGED | MEDIUM | file mode changed |
 | MASS_CHANGE | CRITICAL | many files changed at once (ransomware pattern) |
+| ENCRYPTION_SUSPECTED | HIGH | a changed file went from readable (low entropy) to random-looking (high entropy) |
+| RANSOMWARE_SUSPECTED | CRITICAL | several files look encrypted (default 3 or more), even if too few for MASS_CHANGE |
 | LOG_TAMPERED | CRITICAL | audit log edited / truncated / deleted |
 | BASELINE_TAMPERED | CRITICAL | baseline edited / deleted |
+
+## Entropy-based ransomware detection
+Encrypted data looks random: its Shannon entropy is close to 8 bits per byte, while normal text is
+about 4-5. When a file changes, TamperGuard measures the entropy of its first 64 KB and compares it
+with the entropy stored in the baseline. A file that goes from below 7.0 to 7.5 or above raises
+`ENCRYPTION_SUSPECTED`; when 3 or more files do, it raises `RANSOMWARE_SUSPECTED`. This catches slow
+or small attacks that stay below the `MASS_CHANGE` threshold.
+```bash
+python tamperguard.py check path/to/folder --entropy-threshold 7.5 --ransom-files 3
+```
+Known limits: files smaller than 1 KB are skipped (they cannot reach high entropy); files that were
+already compressed or encrypted (zip, jpg, mp4) are ignored; and baselines created before this
+feature have no entropy values, so run `rebaseline` once to enable it. Replacing a text file with a
+legitimately compressed one can still cause a false alarm.
 
 ## Important security notes
 * `tg_data/key.bin` is the secret HMAC key. **Copy it (and ideally the baseline and log)

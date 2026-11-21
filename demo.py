@@ -45,4 +45,4 @@ step("3. Attacker edits config.ini, plants a web shell, deletes notes.txt", ["ch
 step("4. Show the tamper-evident audit log", ["show-log"])
 step("5. Log is intact?", ["verify-log"])
 step("6. Attacker edits the log to hide the MODIFIED alert...", ["verify-log"], action=hide)
-print("\nDemo finished. (Run `python attack_simulation.py` for the full 18-scenario evaluation.)")
+print("\nDemo finished. (Run `python attack_simulation.py` for the full 21-scenario evaluation.)")
