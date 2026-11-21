@@ -2,8 +2,8 @@
 """
 Attack simulation & evaluation for TamperGuard.
 
-Runs 18 scenarios (attacks on monitored files, attacks on the evidence itself,
-and two *known limitations*) plus a performance benchmark and a detection-latency
+Runs 21 scenarios (attacks on monitored files, attacks on the evidence itself,
+false-positive controls and two *known limitations*) plus a performance benchmark and a detection-latency
 test. Results are printed and saved to results.json / results.md.
 
 Usage:  python attack_simulation.py
@@ -237,6 +237,63 @@ def s_rollback(root, data):
     return bool(probs), ("rollback to older valid copy -> " + ("; ".join(probs[:2]) if probs else "no alerts (UNDETECTED)"))
 
 
+def fake_encrypt(data, key=b"attacker-key"):
+    """Stream-cipher style 'encryption' (HMAC-SHA256 keystream XOR) -> output looks random."""
+    out = bytearray()
+    counter = 0
+    while len(out) < len(data):
+        out += hashlib.sha256(key + counter.to_bytes(8, "big")).digest()
+        counter += 1
+    return bytes(a ^ b for a, b in zip(data, out))
+
+
+def add_documents(root, data, n=6):
+    """Add n ~5 KB text documents, then re-create the baseline so it includes them."""
+    names = []
+    for i in range(n):
+        name = "report%02d.txt" % i
+        text = ("Quarterly report %d: revenue grew steadily while customer satisfaction stayed high. "
+                "Budget, hiring and planning notes follow below. " % i) * 30
+        open(os.path.join(root, name), "w").write(text)
+        names.append(name)
+    tg.do_init(root, data, force=True)
+    return names
+
+
+def s_ransom_low_volume(root, data):
+    """Ransomware that encrypts only 5 files: too few for MASS_CHANGE (threshold 10)."""
+    names = add_documents(root, data, 6)
+    for name in names[:5]:
+        p = os.path.join(root, name)
+        b = open(p, "rb").read()
+        open(p, "wb").write(fake_encrypt(b))
+    k = kinds(check(root, data))
+    ok = ("ENCRYPTION_SUSPECTED" in k and "RANSOMWARE_SUSPECTED" in k and "MASS_CHANGE" not in k)
+    return ok, str(k) + " (caught by entropy, below the mass-change threshold)"
+
+
+def s_benign_text_edits(root, data):
+    """CONTROL: normal text edits to 6 documents must not look like ransomware."""
+    names = add_documents(root, data, 6)
+    for name in names:
+        open(os.path.join(root, name), "a").write("Added note: meeting moved to Friday.\n" * 5)
+    k = kinds(check(root, data))
+    ok = "MODIFIED" in k and "ENCRYPTION_SUSPECTED" not in k and "RANSOMWARE_SUSPECTED" not in k
+    return ok, str(k)
+
+
+def s_compressed_file(root, data):
+    """CONTROL: an archive that was already random-looking and is replaced is not flagged."""
+    open(os.path.join(root, "backup.zip"), "wb").write(os.urandom(8192))
+    tg.do_init(root, data, force=True)
+    open(os.path.join(root, "backup.zip"), "wb").write(os.urandom(8192))
+    k = kinds(check(root, data))
+    ok = "MODIFIED" in k and "ENCRYPTION_SUSPECTED" not in k
+    return ok, str(k)
+
+
+CONTROLS = {"S01", "S18", "S19"}      # tests where PASS means "no false alarm"
+
 SCENARIOS = [
     # (id, category, description, function, expected_detect)
     ("S01", "Baseline behaviour", "No changes (false-positive check)", s_clean, True),
@@ -255,6 +312,9 @@ SCENARIOS = [
     ("S14", "Attack on evidence", "Baseline hash edited to hide a changed file", s_baseline_edit, True),
     ("S15", "Attack on evidence", "Baseline file deleted", s_baseline_delete, True),
     ("S16", "Attack on evidence", "Anchor file forged to hide truncation", s_anchor_forge, True),
+    ("S17", "Attack on files", "Ransomware below mass-change threshold (5 files, entropy check)", s_ransom_low_volume, True),
+    ("S18", "False-positive control", "Normal text edits to 6 documents", s_benign_text_edits, True),
+    ("S19", "False-positive control", "Already-compressed archive legitimately replaced", s_compressed_file, True),
     ("L01", "Known limitation", "Attacker steals the secret key and re-signs everything", s_key_compromise, False),
     ("L02", "Known limitation", "Rollback: attacker restores older valid log + anchor", s_rollback, False),
 ]
@@ -342,7 +402,7 @@ def main():
             detected, obs = False, "ERROR: %r" % ex
         _rm(base)
         outcome = "DETECTED" if detected else "NOT DETECTED"
-        if sid == "S01":
+        if sid in CONTROLS:
             outcome = "NO FALSE ALARM" if detected else "FALSE ALARM"
         passed = (detected == expect)
         results.append({"id": sid, "category": cat, "scenario": desc, "outcome": outcome,
@@ -351,11 +411,12 @@ def main():
 
     perf = benchmark()
     lat = latency()
-    attacks = [r for r in results if r["id"].startswith("S") and r["id"] != "S01"]
+    attacks = [r for r in results if r["id"].startswith("S") and r["id"] not in CONTROLS]
     det = sum(1 for r in attacks if r["outcome"] == "DETECTED")
     summary = {"attack_scenarios": len(attacks), "detected": det,
                "detection_rate_pct": round(100.0 * det / len(attacks), 1),
-               "false_positives_on_clean_run": 0 if results[0]["outcome"] == "NO FALSE ALARM" else 1,
+               "false_positives": sum(1 for r in results if r["id"] in CONTROLS and r["outcome"] == "FALSE ALARM"),
+               "false_alarm_controls": len(CONTROLS),
                "all_as_expected": all(r["as_expected"] for r in results)}
     print("-" * 78)
     print("Detection rate: %d/%d (%.1f%%)   | known limitations demonstrated: 2"
