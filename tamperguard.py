@@ -28,18 +28,26 @@ import argparse
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import stat
 import sys
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timezone
 
 CHUNK = 1024 * 1024
 GENESIS = "0" * 64
 DEFAULT_DATA = "tg_data"
 DEFAULT_MASS_THRESHOLD = 10
+# --- entropy-based ransomware detection ---------------------------------
+DEFAULT_ENTROPY_THRESHOLD = 7.5   # bits per byte (max 8). Encrypted data is ~7.9+, text is ~4-5
+DEFAULT_RANSOM_FILES = 3          # this many files turning "random" => RANSOMWARE_SUSPECTED
+ENTROPY_SAMPLE = 64 * 1024        # only the first 64 KB of a file is measured (fast)
+ENTROPY_MIN_SIZE = 1024           # tiny files cannot reach high entropy, so they are skipped
+ENTROPY_OLD_MAX = 7.0             # files that were already high-entropy (zip, jpg...) are ignored
 
 SEVERITY = {
     "MODIFIED": "HIGH",
@@ -48,6 +56,8 @@ SEVERITY = {
     "RENAMED": "MEDIUM",
     "PERMISSION_CHANGED": "MEDIUM",
     "MASS_CHANGE": "CRITICAL",
+    "ENCRYPTION_SUSPECTED": "HIGH",
+    "RANSOMWARE_SUSPECTED": "CRITICAL",
     "LOG_TAMPERED": "CRITICAL",
     "BASELINE_TAMPERED": "CRITICAL",
     "BASELINE_CREATED": "INFO",
@@ -110,10 +120,27 @@ def hash_file(path):
     return h.hexdigest()
 
 
+def shannon_entropy(data):
+    """Shannon entropy in bits per byte: 0 (all bytes equal) .. 8 (perfectly random)."""
+    if not data:
+        return 0.0
+    n = len(data)
+    return -sum((c / n) * math.log2(c / n) for c in Counter(data).values())
+
+
+def file_entropy(path):
+    """Entropy of the first ENTROPY_SAMPLE bytes of a file (None if unreadable)."""
+    try:
+        with open(path, "rb") as f:
+            return round(shannon_entropy(f.read(ENTROPY_SAMPLE)), 3)
+    except OSError:
+        return None
+
+
 # --------------------------------------------------------------------------
 # Scanning / baseline
 # --------------------------------------------------------------------------
-def scan(root, data_dir):
+def scan(root, data_dir, with_entropy=False):
     """Return {relative_path: {sha256, size, mode}} for every regular file."""
     root = os.path.abspath(root)
     skip = os.path.realpath(data_dir)
@@ -132,6 +159,8 @@ def scan(root, data_dir):
             rel = os.path.relpath(full, root).replace(os.sep, "/")
             files[rel] = {"sha256": hash_file(full), "size": st.st_size,
                           "mode": stat.S_IMODE(st.st_mode)}
+            if with_entropy:                      # only needed when (re)creating the baseline
+                files[rel]["entropy"] = file_entropy(full)
     return files
 
 
@@ -264,7 +293,8 @@ class SecureLog:
 # --------------------------------------------------------------------------
 # Change detection
 # --------------------------------------------------------------------------
-def build_events(base_files, cur_files, mass_threshold=DEFAULT_MASS_THRESHOLD):
+def build_events(base_files, cur_files, mass_threshold=DEFAULT_MASS_THRESHOLD, root=None,
+                 entropy_threshold=DEFAULT_ENTROPY_THRESHOLD, ransom_files=DEFAULT_RANSOM_FILES):
     """Compare baseline with current state. Returns list of (event, path, details)."""
     events = []
     deleted = sorted(p for p in base_files if p not in cur_files)
@@ -287,6 +317,7 @@ def build_events(base_files, cur_files, mass_threshold=DEFAULT_MASS_THRESHOLD):
     new = [p for p in new if p not in renamed_targets]
 
     modified = []
+    encrypted = []
     for p, b in sorted(base_files.items()):
         c = cur_files.get(p)
         if c is None:
@@ -296,6 +327,16 @@ def build_events(base_files, cur_files, mass_threshold=DEFAULT_MASS_THRESHOLD):
             events.append(("MODIFIED", p, {
                 "old_sha256": b["sha256"], "new_sha256": c["sha256"],
                 "old_size": b["size"], "new_size": c["size"]}))
+            # ransomware heuristic: a low-entropy file that suddenly looks random
+            if root is not None and c["size"] >= ENTROPY_MIN_SIZE:
+                old_e = b.get("entropy")
+                new_e = file_entropy(os.path.join(root, p))
+                if (old_e is not None and new_e is not None
+                        and old_e < ENTROPY_OLD_MAX and new_e >= entropy_threshold):
+                    encrypted.append(p)
+                    events.append(("ENCRYPTION_SUSPECTED", p, {
+                        "old_entropy": old_e, "new_entropy": new_e,
+                        "threshold": entropy_threshold}))
         elif c["mode"] != b["mode"]:
             events.append(("PERMISSION_CHANGED", p, {
                 "old_mode": oct(b["mode"]), "new_mode": oct(c["mode"])}))
@@ -311,6 +352,10 @@ def build_events(base_files, cur_files, mass_threshold=DEFAULT_MASS_THRESHOLD):
         events.append(("MASS_CHANGE", "*", {
             "modified": len(modified), "deleted": len(still_deleted),
             "note": "possible ransomware / mass tampering"}))
+    if len(encrypted) >= ransom_files:
+        events.append(("RANSOMWARE_SUSPECTED", "*", {
+            "files": len(encrypted),
+            "note": "several files changed from readable to random-looking content (encryption)"}))
     return events
 
 
@@ -332,11 +377,15 @@ def format_alert(event, path, details):
         extra = "  -> %s" % details["new_path"]
     elif event == "MASS_CHANGE":
         extra = "  (%d modified, %d deleted)" % (details["modified"], details["deleted"])
+    elif event == "ENCRYPTION_SUSPECTED":
+        extra = "  entropy %.2f -> %.2f bits/byte" % (details["old_entropy"], details["new_entropy"])
+    elif event == "RANSOMWARE_SUSPECTED":
+        extra = "  (%d files look encrypted)" % details["files"]
     elif event == "PERMISSION_CHANGED":
         extra = "  %s -> %s" % (details["old_mode"], details["new_mode"])
     use_color = sys.stdout.isatty()
     c, r = (COLOR.get(sev, ""), RESET) if use_color else ("", "")
-    return "%s[%s] %-18s %s%s%s" % (c, sev, event, path, extra, r)
+    return "%s[%s] %-20s %s%s%s" % (c, sev, event, path, extra, r)
 
 
 # --------------------------------------------------------------------------
@@ -346,14 +395,15 @@ def do_init(root, data_dir, force=False):
     if os.path.exists(baseline_path(data_dir)) and not force:
         raise FileExistsError("Baseline already exists. Use --force to overwrite.")
     key = load_key(data_dir, create=True)
-    files = scan(root, data_dir)
+    files = scan(root, data_dir, with_entropy=True)
     save_baseline(data_dir, key, root, files)
     log = SecureLog(data_dir, key)
     log.append("BASELINE_CREATED", os.path.abspath(root), {"files": len(files)})
     return len(files)
 
 
-def do_check(root, data_dir, mass_threshold=DEFAULT_MASS_THRESHOLD, quiet=False, write_log=True):
+def do_check(root, data_dir, mass_threshold=DEFAULT_MASS_THRESHOLD, quiet=False, write_log=True,
+             entropy_threshold=DEFAULT_ENTROPY_THRESHOLD, ransom_files=DEFAULT_RANSOM_FILES):
     """One-off scan. Returns a report dict."""
     key = load_key(data_dir)
     log = SecureLog(data_dir, key)
@@ -370,7 +420,8 @@ def do_check(root, data_dir, mass_threshold=DEFAULT_MASS_THRESHOLD, quiet=False,
 
     if base is not None and ok:
         cur = scan(root, data_dir)
-        report["events"] += build_events(base["files"], cur, mass_threshold)
+        report["events"] += build_events(base["files"], cur, mass_threshold, root,
+                                         entropy_threshold, ransom_files)
 
     for ev in report["events"]:
         if not quiet:
@@ -386,7 +437,8 @@ def do_check(root, data_dir, mass_threshold=DEFAULT_MASS_THRESHOLD, quiet=False,
 
 
 def watch_loop(root, data_dir, interval=2.0, mass_threshold=DEFAULT_MASS_THRESHOLD,
-               stop=None, callback=None, quiet=False):
+               stop=None, callback=None, quiet=False,
+               entropy_threshold=DEFAULT_ENTROPY_THRESHOLD, ransom_files=DEFAULT_RANSOM_FILES):
     """Continuously monitor. Each distinct change is reported/logged once."""
     key = load_key(data_dir)
     log = SecureLog(data_dir, key)
@@ -411,7 +463,8 @@ def watch_loop(root, data_dir, interval=2.0, mass_threshold=DEFAULT_MASS_THRESHO
         cycle += 1
         active = {}
         cur = scan(root, data_dir)
-        for ev in build_events(trusted, cur, mass_threshold):
+        for ev in build_events(trusted, cur, mass_threshold, root,
+                               entropy_threshold, ransom_files):
             active[json.dumps([ev[0], ev[1], ev[2]], sort_keys=True)] = ev
         # integrity of our own evidence (reported once, then remembered)
         _, bok = load_baseline(data_dir, key)
@@ -440,7 +493,7 @@ def do_rebaseline(root, data_dir):
     problems = log.verify()
     if problems:
         raise SystemExit("Refusing to rebaseline: audit log is not intact:\n  " + "\n  ".join(problems))
-    files = scan(root, data_dir)
+    files = scan(root, data_dir, with_entropy=True)
     save_baseline(data_dir, key, root, files)
     log.append("BASELINE_UPDATED", os.path.abspath(root), {"files": len(files)})
     return len(files)
@@ -460,9 +513,15 @@ def main(argv=None):
     s.add_argument("folder"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("check", help="scan once and report changes")
     s.add_argument("folder"); s.add_argument("--mass-threshold", type=int, default=DEFAULT_MASS_THRESHOLD)
+    s.add_argument("--entropy-threshold", type=float, default=DEFAULT_ENTROPY_THRESHOLD,
+                   help="bits/byte above which a changed file looks encrypted (default 7.5)")
+    s.add_argument("--ransom-files", type=int, default=DEFAULT_RANSOM_FILES,
+                   help="number of encrypted-looking files that raises RANSOMWARE_SUSPECTED (default 3)")
     s = sub.add_parser("watch", help="monitor continuously (Ctrl+C to stop)")
     s.add_argument("folder"); s.add_argument("--interval", type=float, default=2.0)
     s.add_argument("--mass-threshold", type=int, default=DEFAULT_MASS_THRESHOLD)
+    s.add_argument("--entropy-threshold", type=float, default=DEFAULT_ENTROPY_THRESHOLD)
+    s.add_argument("--ransom-files", type=int, default=DEFAULT_RANSOM_FILES)
     s = sub.add_parser("rebaseline", help="accept current state as the new baseline")
     s.add_argument("folder")
     sub.add_parser("verify-log", help="verify integrity of the audit log")
@@ -476,14 +535,16 @@ def main(argv=None):
         print("Baseline created: %d files recorded. Data stored in '%s'." % (n, a.data))
         print("IMPORTANT: keep a copy of '%s' somewhere safe/offline." % key_path(a.data))
     elif a.cmd == "check":
-        r = do_check(a.folder, a.data, a.mass_threshold)
+        r = do_check(a.folder, a.data, a.mass_threshold,
+                     entropy_threshold=a.entropy_threshold, ransom_files=a.ransom_files)
         if not r["events"]:
             print("OK - no changes detected, baseline and log are intact.")
         return r["exit_code"]
     elif a.cmd == "watch":
         print("Watching '%s' every %.1fs - press Ctrl+C to stop." % (a.folder, a.interval))
         try:
-            watch_loop(a.folder, a.data, a.interval, a.mass_threshold)
+            watch_loop(a.folder, a.data, a.interval, a.mass_threshold,
+                       entropy_threshold=a.entropy_threshold, ransom_files=a.ransom_files)
         except KeyboardInterrupt:
             print("\nStopped.")
     elif a.cmd == "rebaseline":
@@ -504,7 +565,7 @@ def main(argv=None):
             path = str(e.get("path", ""))
             if len(path) > 45:                      # keep each line short enough for narrow consoles
                 path = "..." + path[-42:]
-            print("%s  #%s  %-8s %-18s %s" % (e.get("ts", ""), e.get("idx", "?"),
+            print("%s  #%s  %-8s %-20s %s" % (e.get("ts", ""), e.get("idx", "?"),
                                               e.get("severity", ""), e.get("event", ""), path))
     return 0
 
