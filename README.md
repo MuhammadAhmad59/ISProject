@@ -1,15 +1,17 @@
 # TamperGuard
 **File Integrity Monitoring with Tamper-Evident Hash-Chained Logging**
 CS3002 Information Security (Fall 2026) – Term Project
+Author: Muhammad Ahmad (GitHub: MuhammadAhmad59)
 
 TamperGuard protects a folder against unauthorized changes. It stores a trusted
 SHA-256 baseline of every file, detects modified / deleted / new / renamed files
-and permission changes, flags ransomware-style mass changes, and writes every alert
+and permission changes, flags ransomware-style changes (mass changes and encryption-like
+content), and writes every alert
 to an audit log that **cannot be silently edited** (HMAC hash chain + signed anchor).
 
 ## Requirements
 * Python 3.8 or newer. **No external libraries** (standard library only).
-* Works on Windows, Linux, macOS.
+* Tested on Windows 10 and Linux. It uses only portable Python, so it should also work on macOS (not tested).
 
 ## Files
 | File | Purpose |
@@ -17,7 +19,8 @@ to an audit log that **cannot be silently edited** (HMAC hash chain + signed anc
 | `tamperguard.py` | the tool (CLI + library) |
 | `attack_simulation.py` | 21 test scenarios (attacks, false-positive controls, known limitations), performance and latency tests |
 | `demo.py` | step-by-step demo for the in-class evaluation |
-| `results.json`, `results.md` | output of the last evaluation run |
+| `results.json`, `results.md` | output of the last evaluation run (Windows 10) |
+| `docs/` | proposal, architecture documentation and security analysis |
 
 ## Windows quick start (PowerShell or cmd)
 ```powershell
@@ -98,13 +101,33 @@ legitimately compressed one can still cause a false alarm.
 * Keep `--data` outside the protected folder (it is skipped automatically if inside).
 * TamperGuard *detects* tampering; it does not prevent or undo it.
 
+## Test results (Windows 10, Intel Core i7-10850H, 16 GB RAM, SSD)
+Run `python attack_simulation.py` to reproduce. Summary of two runs (timings vary between runs):
+
+| Measure | Result |
+|---|---|
+| Attacks detected | 16 of 16 (100%) |
+| False alarms in 3 control scenarios | 0 |
+| Known limitations confirmed | 2 (secret key theft, log rollback) |
+| Scan of 1,000 files (97.7 MB) | about 1.1 to 1.2 s (two runs) |
+| Detection delay in watch mode (0.5 s polling) | mean 0.54 to 0.61 s (two runs) |
+
+The scenarios were written by the author, so these results show how the tool handles these specific
+attacks; they are not an independent benchmark. Details are in `docs/SECURITY_ANALYSIS.md`.
+
+## Documentation
+* [Architecture](docs/ARCHITECTURE.md): components, log design, entropy detection, threat model
+* [Security analysis](docs/SECURITY_ANALYSIS.md): results, performance, limitations, lessons learned
+* [Project proposal](docs/TamperGuard_Project_Proposal.docx)
+
 ## Repository layout
 ```
-TamperGuard/
-  tamperguard.py          # the tool
-  attack_simulation.py    # evaluation suite
-  demo.py                 # live demo
+ISProject/
+  tamperguard.py            # the tool
+  attack_simulation.py      # evaluation suite (21 scenarios)
+  demo.py                   # live demo
+  results.json, results.md  # last evaluation results
   README.md
-  docs/                   # proposal and project documentation
-  .gitignore              # keeps the secret key and runtime data out of Git
+  docs/                     # proposal, architecture, security analysis
+  .gitignore                # keeps the secret key and runtime data out of Git
 ```
