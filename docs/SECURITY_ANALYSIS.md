@@ -13,8 +13,8 @@ TamperGuard was tested with an automated suite of 21 scenarios (`attack_simulati
 - **0 false alarms** in the 3 control scenarios.
 - **2 limitations were confirmed** (key theft and log rollback). They are not detected, and are
   discussed honestly in section 6.
-- A scan of 1,000 files (97.7 MB) took about 1.2 s, and the mean detection delay in watch mode was
-  0.54 s with a 0.5 s polling interval.
+- A scan of 1,000 files (97.7 MB) took about 1.1 to 1.2 s, and the mean detection delay in watch
+  mode was 0.54 to 0.61 s with a 0.5 s polling interval (two full runs).
 
 All of these results were produced on the machine below and can be reproduced with
 `python attack_simulation.py`. The scenarios were written by the author, so they show that the
@@ -30,7 +30,7 @@ tool handles these specific attacks. They are not an independent benchmark.
 | Storage | 477 GB SSD (SK hynix PC601) |
 | Operating system | Windows 10 Pro, 64-bit (build 19045) |
 | Software | Python 3, standard library only |
-| Date of run | 21 November 2026 |
+| Dates of runs | 21 November 2026, and 24 November 2026 (from a fresh clone of the repository) |
 
 ## 3. Method
 
@@ -85,34 +85,38 @@ scenarios where an attack is expected to succeed, to show where the design stops
 
 ### 4.3 Performance
 
-Measured on the machine in section 2 (one run):
+Two full runs of the final version on the machine in section 2 (run 1 on 21 November, run 2 on
+24 November from a fresh clone):
 
-| Test | Result |
-|---|---|
-| Creating a baseline of 1,000 files (97.7 MB) | 9.55 s |
-| Full check of 1,000 files | 1.25 s (about 78 MB/s) |
-| Hashing one 100 MB file | 0.33 s |
-| Appending 500 log entries | 6.61 s (about 13 ms per entry) |
-| Verifying a 500-entry log | 0.05 s |
+| Test | Run 1 | Run 2 |
+|---|---|---|
+| Creating a baseline of 1,000 files (97.7 MB) | 9.55 s | 14.42 s |
+| Full check of 1,000 files | 1.25 s (78 MB/s) | 1.13 s (87 MB/s) |
+| Hashing one 100 MB file | 0.33 s | 0.25 s |
+| Appending 500 log entries | 6.61 s (13 ms each) | 13.94 s (28 ms each) |
+| Verifying a 500-entry log | 0.05 s | 0.07 s |
 
 Notes:
 
-- Creating a baseline became slower after the entropy feature was added. An earlier run on the
-  same machine, before that feature, took 5.76 s. The extra time is the one-off cost of measuring
-  entropy for every file. Normal checks do not measure entropy for unchanged files.
-- The check time also differed between runs (0.92 s earlier, 1.25 s now) even though that code path
-  did not change, so these timings vary from run to run. Antivirus scanning and other programs
-  running at the same time could be factors, but this was not investigated.
+- **The timings vary a lot between runs on the same machine.** Baseline creation and log writing
+  took about twice as long in run 2. The checks and hashing stayed close together. The cause was
+  not investigated. Antivirus scanning and other programs running at the same time are possible
+  factors, but this was not tested. The numbers should be read as typical orders of magnitude, not
+  exact values.
+- Creating a baseline became slower after the entropy feature was added. A run before that feature
+  took 5.76 s for the same 1,000 files. The extra time is the one-off cost of measuring entropy for
+  every file. Normal checks do not measure entropy for unchanged files.
 - Each log entry is written to disk with a forced flush so that it survives a crash. This is the
   likely reason log writes take milliseconds each, but this was not isolated by a separate test.
   For a monitoring tool that records only changes, this is acceptable.
 
 ### 4.4 Detection delay in watch mode
 
-With a polling interval of 0.5 s, five modifications were detected after 0.235, 0.637, 0.617, 0.606
-and 0.594 seconds (mean 0.54 s, maximum 0.64 s). The delay is bounded by the polling interval plus
-the time to scan and hash the folder. A shorter interval gives faster alerts at the cost of more
-CPU and disk reads.
+With a polling interval of 0.5 s, five modifications were detected per run. Run 1: 0.235, 0.637,
+0.617, 0.606 and 0.594 seconds (mean 0.54 s, maximum 0.64 s). Run 2: 0.328, 0.672, 0.673, 0.693 and
+0.666 seconds (mean 0.61 s, maximum 0.69 s). The delay is bounded by the polling interval plus the
+time to scan and hash the folder. A shorter interval gives faster alerts at the cost of more CPU
+and disk reads.
 
 ## 5. Why the design resists the attacks that were tested
 
